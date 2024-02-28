@@ -1,0 +1,16 @@
+[Unit]
+Description=KMS Client Go Service
+After=network.target
+
+[Service]
+Type=forking
+ExecStart=/var/lib/kms-client/script/kms-client.sh start
+ExecReload=/var/lib/kms-client/script/kms-client.sh restart
+ExecStop=/var/lib/kms-client/script/kms-client.sh stop
+PIDFile=/var/run/kms-client.pid
+Restart=always
+KillMode=process
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
