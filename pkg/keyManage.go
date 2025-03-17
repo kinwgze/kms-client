@@ -4,43 +4,56 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"fmt"
 	"github.com/IBM/go-kmip"
+	"github.com/sirupsen/logrus"
 	"os"
 	"time"
 )
 
-func Create(endPoint, caFile, cerFile, keyFile string) kmip.CreateResponse {
-	cli := kmip.Client{}
-	cli.Endpoint = endPoint
-	cli.TLSConfig = &tls.Config{}
+func Create(endPoint, caFile, cerFile, keyFile, algorithm, length string) kmip.CreateResponse {
+	logrus.WithFields(logrus.Fields{
+		"endPoint":  endPoint,
+		"caFile":    caFile,
+		"cerFile":   cerFile,
+		"keyFile":   keyFile,
+		"algorithm": algorithm,
+		"length":    length,
+	}).Info("Create key.")
 	var response kmip.CreateResponse
-	kmip.DefaultClientTLSConfig(cli.TLSConfig)
-	caCert, err := os.ReadFile(caFile)
-	if err != nil {
-		fmt.Println(err)
+	cli, err, hasError := getClient(endPoint, caFile, cerFile, keyFile)
+	if hasError {
 		return response
 	}
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
-
-	cert, err := tls.LoadX509KeyPair(cerFile, keyFile)
-	if err != nil {
-		fmt.Println(err)
-		return response
-	}
-	cli.TLSConfig.Certificates = []tls.Certificate{cert}
-	cli.TLSConfig.RootCAs = caCertPool
-	//cli.TLSConfig.InsecureSkipVerify = true
-	cli.ReadTimeout = 10 * time.Second
-	cli.WriteTimeout = 10 * time.Second
 
 	err = cli.Connect()
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to connect server. ", err)
 		return response
 	}
 	defer cli.Close()
+
+	var keyAlgorithm kmip.Enum
+	var keyLength int32
+
+	switch algorithm {
+	case "AES":
+		keyAlgorithm = kmip.CRYPTO_AES
+	case "SM4":
+		keyAlgorithm = kmip.CRYPTO_SM4
+	default:
+		keyAlgorithm = kmip.CRYPTO_AES
+	}
+
+	switch length {
+	case "128":
+		keyLength = int32(128)
+	case "192":
+		keyLength = int32(192)
+	case "256":
+		keyLength = int32(256)
+	default:
+		keyLength = int32(256)
+	}
 
 	resp, err := cli.Send(kmip.OPERATION_CREATE, kmip.CreateRequest{
 		ObjectType: kmip.OBJECT_TYPE_SYMMETRIC_KEY,
@@ -48,11 +61,11 @@ func Create(endPoint, caFile, cerFile, keyFile string) kmip.CreateResponse {
 			Attributes: []kmip.Attribute{
 				{
 					Name:  kmip.ATTRIBUTE_NAME_CRYPTOGRAPHIC_ALGORITHM,
-					Value: kmip.CRYPTO_AES,
+					Value: keyAlgorithm,
 				},
 				{
 					Name:  kmip.ATTRIBUTE_NAME_CRYPTOGRAPHIC_LENGTH,
-					Value: int32(128),
+					Value: keyLength,
 				},
 				{
 					Name:  kmip.ATTRIBUTE_NAME_CRYPTOGRAPHIC_USAGE_MASK,
@@ -61,13 +74,14 @@ func Create(endPoint, caFile, cerFile, keyFile string) kmip.CreateResponse {
 			},
 		}})
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to send create request. ", err)
 		return kmip.CreateResponse{}
 	}
 
 	d, _ := json.MarshalIndent(resp, "", "    ")
 	err = json.Unmarshal(d, &response)
 	if err != nil {
+		logrus.Error("failed to create key. ", err)
 		return response
 	}
 	// 激活与创建暂时放一起
@@ -76,42 +90,34 @@ func Create(endPoint, caFile, cerFile, keyFile string) kmip.CreateResponse {
 		UniqueIdentifier: uuid,
 	})
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to send activate request. ", err)
 		return kmip.CreateResponse{}
 	}
-	cli.Close()
+	logrus.Info("Create success, key uuid is ", uuid)
+	err = cli.Close()
+	if err != nil {
+		logrus.Error("failed to close connect. ", err)
+	}
 	return response
 }
 
-// 查询key的信息
+// GetKeyInfo 查询key的信息
 func GetKeyInfo(endPoint, caFile, cerFile, keyFile, uuid string) kmip.GetResponse {
-	cli := kmip.Client{}
-	cli.Endpoint = endPoint
-	cli.TLSConfig = &tls.Config{}
+	logrus.WithFields(logrus.Fields{
+		"endPoint": endPoint,
+		"caFile":   caFile,
+		"cerFile":  cerFile,
+		"keyFile":  keyFile,
+		"uuid":     uuid,
+	}).Info("Query key.")
 	var response kmip.GetResponse
-	kmip.DefaultClientTLSConfig(cli.TLSConfig)
-	caCert, err := os.ReadFile(caFile)
-	if err != nil {
-		fmt.Println(err)
+	cli, err, hasError := getClient(endPoint, caFile, cerFile, keyFile)
+	if hasError {
 		return response
 	}
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
-
-	cert, err := tls.LoadX509KeyPair(cerFile, keyFile)
-	if err != nil {
-		fmt.Println(err)
-		return response
-	}
-	cli.TLSConfig.Certificates = []tls.Certificate{cert}
-	cli.TLSConfig.RootCAs = caCertPool
-	//cli.TLSConfig.InsecureSkipVerify = true
-	cli.ReadTimeout = 10 * time.Second
-	cli.WriteTimeout = 10 * time.Second
-
 	err = cli.Connect()
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to connect server. ", err)
 		return response
 	}
 	defer cli.Close()
@@ -120,47 +126,42 @@ func GetKeyInfo(endPoint, caFile, cerFile, keyFile, uuid string) kmip.GetRespons
 		UniqueIdentifier: uuid,
 	})
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to send query request. ", err)
 		return response
 	}
 	d, _ := json.MarshalIndent(resp, "", "    ")
 	err = json.Unmarshal(d, &response)
 	if err != nil {
-		return response
+		logrus.Error("failed to close connect. ", err)
 	}
-	cli.Close()
+	logrus.Info("Query success, key uuid is ", response.UniqueIdentifier)
 	return response
 }
 
 // 注销秘钥
 func DestroyKey(endPoint, caFile, cerFile, keyFile, uuid string) kmip.DestroyResponse {
+	logrus.WithFields(logrus.Fields{
+		"endPoint": endPoint,
+		"caFile":   caFile,
+		"cerFile":  cerFile,
+		"keyFile":  keyFile,
+		"uuid":     uuid,
+	}).Info("Destroy key.")
+	var response kmip.DestroyResponse
 	cli := kmip.Client{}
 	cli.Endpoint = endPoint
-	cli.TLSConfig = &tls.Config{}
-	var response kmip.DestroyResponse
+	cli.TLSConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
 	kmip.DefaultClientTLSConfig(cli.TLSConfig)
-	caCert, err := os.ReadFile(caFile)
-	if err != nil {
-		fmt.Println(err)
+	cli, err, hasError := getClient(endPoint, caFile, cerFile, keyFile)
+	if hasError {
 		return response
 	}
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
-
-	cert, err := tls.LoadX509KeyPair(cerFile, keyFile)
-	if err != nil {
-		fmt.Println(err)
-		return response
-	}
-	cli.TLSConfig.Certificates = []tls.Certificate{cert}
-	cli.TLSConfig.RootCAs = caCertPool
-	//cli.TLSConfig.InsecureSkipVerify = true
-	cli.ReadTimeout = 10 * time.Second
-	cli.WriteTimeout = 10 * time.Second
 
 	err = cli.Connect()
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to connect server. ", err)
 		return response
 	}
 	defer cli.Close()
@@ -174,7 +175,7 @@ func DestroyKey(endPoint, caFile, cerFile, keyFile, uuid string) kmip.DestroyRes
 		},
 	})
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to revoke key. ", err)
 		return response
 	}
 
@@ -182,7 +183,7 @@ func DestroyKey(endPoint, caFile, cerFile, keyFile, uuid string) kmip.DestroyRes
 		UniqueIdentifier: uuid,
 	})
 	if err != nil {
-		fmt.Println(err)
+		logrus.Error("failed to destroy key. ", err)
 		return response
 	}
 	d, _ := json.MarshalIndent(resp2, "", "    ")
@@ -190,6 +191,35 @@ func DestroyKey(endPoint, caFile, cerFile, keyFile, uuid string) kmip.DestroyRes
 	if err != nil {
 		return response
 	}
+	logrus.Info("Destroy success, key uuid is ", response.UniqueIdentifier)
 	cli.Close()
 	return response
+}
+
+func getClient(endPoint string, caFile string, cerFile string, keyFile string) (kmip.Client, error, bool) {
+	cli := kmip.Client{}
+	cli.Endpoint = endPoint
+	cli.TLSConfig = &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	kmip.DefaultClientTLSConfig(cli.TLSConfig)
+	caCert, err := os.ReadFile(caFile)
+	if err != nil {
+		logrus.Error("failed to read ca file. ", err)
+		return kmip.Client{}, nil, true
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(caCert)
+
+	cert, err := tls.LoadX509KeyPair(cerFile, keyFile)
+	if err != nil {
+		logrus.Error("failed to load key pair. ", err)
+		return kmip.Client{}, nil, true
+	}
+	cli.TLSConfig.Certificates = []tls.Certificate{cert}
+	cli.TLSConfig.RootCAs = caCertPool
+	cli.ReadTimeout = 10 * time.Second
+	cli.WriteTimeout = 10 * time.Second
+	return cli, err, false
 }
