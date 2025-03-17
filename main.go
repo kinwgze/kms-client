@@ -3,16 +3,21 @@ package main
 import (
 	"github.com/gin-gonic/gin"
 	"kmip-client/pkg"
+	"kmip-client/pkg/log"
 	"net/http"
 )
 
 func main() {
+	err := log.InitLogger()
+	if err != nil {
+		return
+	}
 	router := gin.Default()
 	router.GET("create", createKey)
 	router.GET("query", getKeyInfo)
 	router.GET("destroy", destroyKey)
 
-	router.Run(":15696")
+	router.Run("127.0.0.1:15696")
 }
 
 func createKey(c *gin.Context) {
@@ -21,8 +26,10 @@ func createKey(c *gin.Context) {
 	caFile := queryParams.Get("caFile")
 	cerFile := queryParams.Get("cerFile")
 	keyFile := queryParams.Get("keyFile")
+	algorithm := queryParams.Get("algorithm")
+	length := queryParams.Get("length")
 
-	response := kmipservice.Create(endPoint, caFile, cerFile, keyFile)
+	response := kmipservice.Create(endPoint, caFile, cerFile, keyFile, algorithm, length)
 	c.IndentedJSON(http.StatusOK, response)
 }
 
